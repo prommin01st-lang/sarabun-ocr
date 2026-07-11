@@ -90,21 +90,41 @@ def answer(question: str, k: Optional[int] = None, doc_id: Optional[int] = None,
     return {"answer": text, "sources": _sources(hits)}
 
 
-def draft_document(instruction: str, k: int = 5) -> str:
-    """ให้ LLM ร่างเอกสารใหม่ตามคำสั่ง โดยดึงข้อมูลจากคลังมาอ้างอิง (RAG-grounded) ถ้าเกี่ยวข้อง."""
-    hits = vectordb.search(instruction, k=k)
-    context = "\n\n".join(
-        f"[{i}] (จาก {h['meta'].get('source_filename', '?')})\n{h['text']}"
-        for i, h in enumerate(hits, 1)
-    ) or "(ไม่มีเอกสารอ้างอิงในคลัง)"
+# ดึง context มาช่วยร่างเฉพาะที่ "ใกล้จริง" (distance ต่ำ) เพื่อไม่ให้เอกสารไม่เกี่ยวมาหลอกโมเดล
+DRAFT_CTX_MAX_DIST = 0.45
+
+
+def draft_document(instruction: str, k: int = 4) -> str:
+    """ให้ LLM ร่างเอกสารใหม่ตามคำสั่ง.
+
+    - ดึงคลังมาอ้างอิง **เฉพาะเมื่อเกี่ยวข้องจริง** (distance < DRAFT_CTX_MAX_DIST)
+      → ฟอร์มทั่วไปที่ไม่เกี่ยวกับคลังจะไม่ถูกเนื้อหาอื่นมาหลอก
+    - decoding กัน repetition-loop (repeat_penalty) + สั่งให้ตอบเป็นตัวเอกสารล้วน
+    """
+    hits = [h for h in vectordb.search(instruction, k=k)
+            if h.get("distance", 1.0) < DRAFT_CTX_MAX_DIST]
+    ctx_block = ""
+    if hits:
+        context = "\n\n".join(
+            f"[{i}] (จาก {h['meta'].get('source_filename', '?')})\n{h['text']}"
+            for i, h in enumerate(hits, 1)
+        )
+        ctx_block = f"=== ข้อมูลอ้างอิงจากคลัง (ใช้เฉพาะที่เกี่ยวข้อง) ===\n{context}\n\n"
+
     prompt = (
-        "คุณเป็นผู้ช่วยร่างเอกสารภาษาไทย เขียนเอกสารตามคำสั่งให้ครบถ้วนและเป็นทางการ "
-        "ใช้ข้อมูลใน CONTEXT เป็นข้อมูลอ้างอิงถ้าเกี่ยวข้อง จัดรูปแบบ markdown ให้เรียบร้อย\n\n"
-        f"=== CONTEXT (จากคลังเอกสาร) ===\n{context}\n\n"
-        f"=== คำสั่ง ===\n{instruction}\n\n=== เอกสารที่ร่าง ==="
+        "คุณเป็นผู้ช่วยร่างเอกสารราชการภาษาไทย ร่างเอกสารตามคำสั่งให้เป็นทางการ กระชับ ครบถ้วน จัดรูปแบบ markdown\n"
+        "กติกาเข้มงวด: ตอบกลับเป็น **ตัวเอกสารเท่านั้น** ห้ามพูดถึงตัวเอง ห้ามมีคำอธิบายนอกเอกสาร "
+        "ห้ามใช้ภาษาอังกฤษ เขียนแต่ละส่วนครั้งเดียว ห้ามวนซ้ำหัวข้อ จบเมื่อเนื้อหาครบ\n\n"
+        f"{ctx_block}"
+        f"=== คำสั่ง ===\n{instruction}\n\n=== เอกสาร ==="
     )
-    return _ollama_generate(prompt, model=config.SUMMARY_MODEL,
-                            options={"num_predict": 2048})
+    return _ollama_generate(
+        prompt, model=config.SUMMARY_MODEL,
+        options={
+            "num_predict": 1000, "temperature": 0.3, "top_p": 0.9,
+            "repeat_penalty": 1.2, "repeat_last_n": 128,
+        },
+    )
 
 
 def describe_document(text: str, filename: str = "") -> str:
