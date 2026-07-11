@@ -90,6 +90,23 @@ def answer(question: str, k: Optional[int] = None, doc_id: Optional[int] = None,
     return {"answer": text, "sources": _sources(hits)}
 
 
+def draft_document(instruction: str, k: int = 5) -> str:
+    """ให้ LLM ร่างเอกสารใหม่ตามคำสั่ง โดยดึงข้อมูลจากคลังมาอ้างอิง (RAG-grounded) ถ้าเกี่ยวข้อง."""
+    hits = vectordb.search(instruction, k=k)
+    context = "\n\n".join(
+        f"[{i}] (จาก {h['meta'].get('source_filename', '?')})\n{h['text']}"
+        for i, h in enumerate(hits, 1)
+    ) or "(ไม่มีเอกสารอ้างอิงในคลัง)"
+    prompt = (
+        "คุณเป็นผู้ช่วยร่างเอกสารภาษาไทย เขียนเอกสารตามคำสั่งให้ครบถ้วนและเป็นทางการ "
+        "ใช้ข้อมูลใน CONTEXT เป็นข้อมูลอ้างอิงถ้าเกี่ยวข้อง จัดรูปแบบ markdown ให้เรียบร้อย\n\n"
+        f"=== CONTEXT (จากคลังเอกสาร) ===\n{context}\n\n"
+        f"=== คำสั่ง ===\n{instruction}\n\n=== เอกสารที่ร่าง ==="
+    )
+    return _ollama_generate(prompt, model=config.SUMMARY_MODEL,
+                            options={"num_predict": 2048})
+
+
 def describe_document(text: str, filename: str = "") -> str:
     """overview ระดับเอกสาร: เป็นเอกสารประเภทใด + เนื้อหาโดยรวมเกี่ยวกับอะไร (2-4 ประโยค)."""
     text = clean_text(text)

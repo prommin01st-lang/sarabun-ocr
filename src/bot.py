@@ -5,12 +5,13 @@
 from __future__ import annotations
 
 import asyncio
+import io
 import logging
 import tempfile
 from functools import partial, wraps
 from pathlib import Path
 
-from telegram import Update
+from telegram import InputFile, Update
 from telegram.ext import (
     Application,
     CommandHandler,
@@ -37,6 +38,8 @@ WELCOME = (
     "• /doc <id> → สรุป + ถามเจาะไฟล์นั้น\n"
     "• /cat <หมวด> → ถามเจาะทั้งหมวด (/cat = ดูรายการหมวด) · /infolder <โฟลเดอร์> → ถามเจาะทั้งโฟลเดอร์\n"
     "• /update <id> → แทนที่เนื้อหา (ส่งไฟล์ใหม่ตามมา) · /rm <id> → ลบเอกสาร\n"
+    "• /get <id> → ดาวน์โหลดไฟล์ต้นฉบับ · /export <id> → ดาวน์โหลดเนื้อหา (.md)\n"
+    "• /draft <คำสั่ง> → ให้ AI ร่างเอกสารใหม่ → ดาวน์โหลด\n"
     "• /all → กลับถามทั้งคลัง · /summarize <คำค้น> → สรุปเอกสารที่เกี่ยวข้อง"
 )
 
@@ -136,6 +139,75 @@ async def cmd_find(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         lines.append(f"{tag} [{r['id']}] {r['filename'][:40]}{cat}")
     lines.append("\n🎯 มีคำนี้ในเนื้อหา · ≈ เกี่ยวกับหัวข้อ · /doc <id> เพื่อเปิด")
     await update.message.reply_text("\n".join(lines))
+
+
+def _raw_path(row):
+    """หา path ไฟล์ต้นฉบับใน data/raw/ จาก sha256."""
+    cand = sorted(config.RAW_DIR.glob(f"{row['sha256']}*"))
+    return cand[0] if cand else None
+
+
+@restricted
+async def cmd_get(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    """ดาวน์โหลดไฟล์ต้นฉบับกลับ."""
+    if not ctx.args or not ctx.args[0].isdigit():
+        await update.message.reply_text("ใช้: /get <id>")
+        return
+    row = await _run(store.get, int(ctx.args[0]))
+    if not row:
+        await update.message.reply_text(f"ไม่พบเอกสาร id={ctx.args[0]}")
+        return
+    if not _can_edit(update, row):
+        await update.message.reply_text("⛔ ดาวน์โหลดได้เฉพาะเจ้าของไฟล์หรือ admin")
+        return
+    raw = _raw_path(row)
+    if not raw or not raw.exists():
+        await update.message.reply_text("ไม่พบไฟล์ต้นฉบับในเครื่อง")
+        return
+    await update.message.chat.send_action("upload_document")
+    with open(raw, "rb") as f:
+        await update.message.reply_document(document=f, filename=row["filename"])
+
+
+@restricted
+async def cmd_export(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    """ดาวน์โหลดเนื้อหาที่สกัดได้ เป็นไฟล์ .md."""
+    if not ctx.args or not ctx.args[0].isdigit():
+        await update.message.reply_text("ใช้: /export <id>")
+        return
+    row = await _run(store.get, int(ctx.args[0]))
+    if not row:
+        await update.message.reply_text(f"ไม่พบเอกสาร id={ctx.args[0]}")
+        return
+    if not _can_edit(update, row):
+        await update.message.reply_text("⛔ export ได้เฉพาะเจ้าของไฟล์หรือ admin")
+        return
+    p = row["extracted_path"]
+    if not p or not Path(p).exists():
+        await update.message.reply_text("ไม่พบเนื้อหาที่สกัดไว้")
+        return
+    text = Path(p).read_text(encoding="utf-8")
+    name = Path(row["filename"]).stem + ".md"
+    await update.message.chat.send_action("upload_document")
+    await update.message.reply_document(
+        document=InputFile(io.BytesIO(text.encode("utf-8")), filename=name))
+
+
+@restricted
+async def cmd_draft(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    """ให้ AI ร่างเอกสารใหม่ตามคำสั่ง → ส่งเป็นไฟล์ .md."""
+    instruction = " ".join(ctx.args).strip()
+    if not instruction:
+        await update.message.reply_text("ใช้: /draft <คำสั่ง>  (เช่น /draft สรุประเบียบรักษาความลับเป็นบันทึกข้อความ)")
+        return
+    actor = update.effective_user.username or str(update.effective_user.id)
+    await _run(store.log_action, "draft", None, actor, instruction[:120])
+    await update.message.reply_text("📝 กำลังร่างเอกสาร ...")
+    await update.message.chat.send_action("upload_document")
+    text = await _run(rag.draft_document, instruction)
+    await update.message.reply_document(
+        document=InputFile(io.BytesIO(text.encode("utf-8")), filename="draft.md"),
+        caption="ร่างเสร็จแล้ว — ถ้าจะเก็บเข้าคลัง ส่งไฟล์นี้กลับมาได้เลย")
 
 
 @restricted
@@ -466,6 +538,9 @@ def main() -> None:
     app.add_handler(CommandHandler("folder", cmd_folder))
     app.add_handler(CommandHandler("update", cmd_update))
     app.add_handler(CommandHandler("rm", cmd_rm))
+    app.add_handler(CommandHandler("get", cmd_get))
+    app.add_handler(CommandHandler("export", cmd_export))
+    app.add_handler(CommandHandler("draft", cmd_draft))
     app.add_handler(CommandHandler("log", cmd_log))
     app.add_handler(CommandHandler("summarize", cmd_summarize))
     app.add_handler(MessageHandler(filters.Document.ALL, on_document))
