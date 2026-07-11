@@ -31,7 +31,7 @@ WELCOME = (
     "คำสั่ง:\n"
     "• ส่งไฟล์ → เก็บเข้าคลัง\n"
     "• พิมพ์คำถาม → ผมตอบจากเอกสารที่มี\n"
-    "• /list → ดูคลัง (จัดเป็นโฟลเดอร์)\n"
+    "• /list → ดูคลัง (จัดเป็นโฟลเดอร์) · /find <คำค้น> → ค้นว่าไฟล์ไหนเกี่ยวกับ/มีคำนั้น\n"
     "• /mkfolder <ชื่อ> → สร้างโฟลเดอร์ · /mv <id> <โฟลเดอร์> → ย้ายไฟล์\n"
     "• /folder <ชื่อ> → ตั้งโฟลเดอร์ให้ไฟล์ที่จะส่งต่อไป (/folder - = ยกเลิก)\n"
     "• /doc <id> → สรุป + ถามเจาะไฟล์นั้น\n"
@@ -113,6 +113,28 @@ async def cmd_list(update: Update, _ctx: ContextTypes.DEFAULT_TYPE) -> None:
         lines += [_doc_line(d) for d in root]
 
     lines.append("\n💡 /mkfolder <ชื่อ> · /mv <id> <โฟลเดอร์> · /doc <id>")
+    await update.message.reply_text("\n".join(lines))
+
+
+@restricted
+async def cmd_find(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    """ค้นว่า 'ไฟล์ไหน' เกี่ยวกับ/มีคำนี้ (hybrid: keyword + semantic)."""
+    query = " ".join(ctx.args).strip()
+    if not query:
+        await update.message.reply_text("ใช้: /find <คำค้น>  (เช่น /find หนังสือราชการ · /find สมชาย)")
+        return
+    actor = update.effective_user.username or str(update.effective_user.id)
+    await _run(store.log_action, "find", None, actor, query[:120])
+    results = await _run(pipeline.find_documents, query)
+    if not results:
+        await update.message.reply_text(f"ไม่พบไฟล์ที่เกี่ยวกับ «{query}»")
+        return
+    lines = [f"🔎 ไฟล์ที่เกี่ยวกับ «{query}»:"]
+    for r in results:
+        tag = "🎯" if r["keyword"] else "≈"
+        cat = f" · 🏷️{r['category']}" if r["category"] else ""
+        lines.append(f"{tag} [{r['id']}] {r['filename'][:40]}{cat}")
+    lines.append("\n🎯 มีคำนี้ในเนื้อหา · ≈ เกี่ยวกับหัวข้อ · /doc <id> เพื่อเปิด")
     await update.message.reply_text("\n".join(lines))
 
 
@@ -434,6 +456,7 @@ def main() -> None:
     app.add_handler(CommandHandler("start", cmd_start))
     app.add_handler(CommandHandler("help", cmd_help))
     app.add_handler(CommandHandler("list", cmd_list))
+    app.add_handler(CommandHandler("find", cmd_find))
     app.add_handler(CommandHandler("doc", cmd_doc))
     app.add_handler(CommandHandler("all", cmd_all))
     app.add_handler(CommandHandler("cat", cmd_cat))

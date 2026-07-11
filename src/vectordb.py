@@ -131,5 +131,31 @@ def get_document_chunks(doc_id: int) -> list[dict]:
     return [{"text": d, "meta": m} for d, m in pairs]
 
 
+def _distinct_doc_ids(metas: list) -> list:
+    seen: list = []
+    for m in metas or []:
+        d = m.get("doc_id")
+        if d is not None and d not in seen:
+            seen.append(d)
+    return seen
+
+
+def keyword_doc_ids(query: str) -> list:
+    """ค้นแบบ keyword (substring ตรงตัว) ผ่าน Chroma $contains → doc_ids ที่มีคำนี้จริง.
+
+    เหมาะกับชื่อ/คำเฉพาะที่ semantic search จับไม่ได้.
+    """
+    query = (query or "").strip()
+    if not query:
+        return []
+    res = _get_collection().get(where_document={"$contains": query})
+    return _distinct_doc_ids(res.get("metadatas"))
+
+
+def search_doc_ids(query: str, k: int = 15) -> list:
+    """ค้นแบบ semantic → doc_ids เรียงตามความเกี่ยวข้อง (เอกสารที่ 'เกี่ยวกับ' หัวข้อ)."""
+    return _distinct_doc_ids([h["meta"] for h in search(query, k=k)])
+
+
 def delete_document(doc_id: int) -> None:
     _get_collection().delete(where={"doc_id": doc_id})

@@ -180,6 +180,26 @@ def update_file(doc_id: int, path: str, filename: str, actor: Optional[str] = No
         return {"status": "error", "filename": filename, "error": str(e)}
 
 
+def find_documents(query: str, limit: int = 10) -> list:
+    """Catalog search แบบ hybrid: keyword (คำตรงตัว) + semantic (หัวข้อ) → รายการไฟล์ที่ตรง.
+
+    คืน list ของ {id, filename, category, keyword} (keyword=True ถ้าเจอคำนี้ในเนื้อหาตรงๆ)
+    """
+    kw = vectordb.keyword_doc_ids(query)         # เจอคำตรงตัว (ลำดับสำคัญกว่า)
+    sem = vectordb.search_doc_ids(query, k=15)   # เกี่ยวกับหัวข้อ
+    ordered: list = []
+    for d in kw + sem:
+        if d not in ordered:
+            ordered.append(d)
+    out = []
+    for d in ordered[:limit]:
+        row = store.get(d)
+        if row:
+            out.append({"id": d, "filename": row["filename"],
+                        "category": row["category"], "keyword": d in kw})
+    return out
+
+
 def delete_document(doc_id: int, actor: Optional[str] = None) -> bool:
     """ลบเอกสารออกจากทั้ง vector + metadata. คืน False ถ้าไม่พบ."""
     row = store.get(doc_id)
