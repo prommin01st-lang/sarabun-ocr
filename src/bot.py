@@ -79,6 +79,11 @@ async def cmd_start(update: Update, _ctx: ContextTypes.DEFAULT_TYPE) -> None:
     await update.message.reply_text(WELCOME)
 
 
+@restricted
+async def cmd_help(update: Update, _ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    await update.message.reply_text(WELCOME)
+
+
 def _doc_line(d) -> str:
     icon = {"indexed": "✅", "failed": "❌", "processing": "⏳"}.get(d["status"], "•")
     cat = f" · 🏷️{d['category']}" if d["category"] else ""
@@ -427,6 +432,7 @@ def main() -> None:
     store.init_db()
     app = Application.builder().token(config.TELEGRAM_BOT_TOKEN).build()
     app.add_handler(CommandHandler("start", cmd_start))
+    app.add_handler(CommandHandler("help", cmd_help))
     app.add_handler(CommandHandler("list", cmd_list))
     app.add_handler(CommandHandler("doc", cmd_doc))
     app.add_handler(CommandHandler("all", cmd_all))
