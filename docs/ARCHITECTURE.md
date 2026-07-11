@@ -15,6 +15,7 @@
 - [ADR-008: รองรับ PostgreSQL (DATABASE_URL + SQLAlchemy Core)](#adr-008)
 - [ADR-009: Folder + หมวดหมู่ (Categorization)](#adr-009)
 - [ADR-010: RBAC (อนาคต — ออกแบบไว้ก่อน)](#adr-010)
+- [ADR-011: Update เนื้อหาเอกสาร + Audit log + per-file permission](#adr-011)
 
 > **สถานะ:** ADR-001–007 = implemented ✅ · ADR-008–010 = design/config (ยังไม่ implement เต็ม) · Audit: [AUDIT.md](./AUDIT.md)
 
@@ -522,3 +523,35 @@ folder_acl(folder_id, subject_type, subject_id, permission)  -- read/write ต�
 1. [ ] ตาราง users/roles/user_roles
 2. [ ] global-role enforcement ในบอท (ต่อจาก `restricted`)
 3. [ ] per-folder ACL (เฟสหลัง)
+
+---
+
+<a name="adr-011"></a>
+# ADR-011: Update เนื้อหาเอกสาร + Audit log + per-file permission
+
+**Status:** ✅ Implemented
+**Date:** 2026-07-11
+
+## Context
+เอกสารบางอย่างต้องแก้ไข/แทนที่เนื้อหา (เช่นแบบฟอร์มเปล่า → กรอกข้อมูล) และต้องมีร่องรอยว่าใครทำอะไร
+รวมถึงต้องจำกัดสิทธิ์ว่าใครแก้/ลบเอกสารไหนได้ (เมล็ดพันธุ์ของ RBAC ADR-010)
+
+## Decision
+- **`/update <id>` + ส่งไฟล์ใหม่** → แทนที่เนื้อหา **คง doc_id เดิม** (references/scope/Chroma ไม่พัง):
+  ลบ vector เก่า → สกัด+embed ใหม่ → อัปเดต metadata (hash/overview/category ใหม่, `updated_at`) · คง folder/เจ้าของ/created_at
+  - กัน `unchanged` (hash เดิม) และ `conflict` (hash ตรงกับเอกสารอื่น)
+- **`/rm <id>`** → ลบทั้ง vector + metadata
+- **per-file permission** (`_can_edit`): เจ้าของ (`source_user`) หรือ **admin** (`ADMIN_USER_IDS`) เท่านั้น
+- **Audit log** ตาราง `action_logs(action, doc_id, actor?, detail?, created_at)` — field `actor` **nullable เผื่อ RBAC** ในอนาคต
+  · log: ingest / update / delete / query · ดูด้วย `/log` (admin)
+
+## Consequences
+- ✅ แก้เนื้อหาได้โดยไม่เสีย doc_id · มีร่องรอยตรวจสอบ · จำกัดสิทธิ์รายไฟล์เริ่มต้นแล้ว
+- ✅ เป็นฐานที่ RBAC เต็ม (ADR-010) ต่อยอดได้ตรงๆ (actor → user, admin → role)
+- ⚠️ `source_user` เก็บเป็น username-or-id → การเทียบสิทธิ์ยึดรูปแบบเดียวกัน
+
+## Action Items
+1. [x] `pipeline.update_file` / `delete_document` (+actor) · `store.replace_document` · คอลัมน์ `updated_at`
+2. [x] ตาราง `action_logs` + `store.log_action`/`list_logs`
+3. [x] บอท `/update` `/rm` `/log` + `_can_edit` (owner/admin) + `ADMIN_USER_IDS`
+4. [ ] ต่อยอดเป็น RBAC เต็ม (ADR-010) เมื่อ multi-user

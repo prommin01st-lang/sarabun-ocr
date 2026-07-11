@@ -29,6 +29,10 @@ TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
 _allowed = os.getenv("ALLOWED_USER_IDS", "").replace(",", " ").split()
 ALLOWED_USER_IDS: set[int] = {int(x) for x in _allowed if x.strip().isdigit()}
 
+# admin: แก้/ลบเอกสารของใครก็ได้ (เจ้าของไฟล์แก้ของตัวเองได้อยู่แล้ว)
+_admins = os.getenv("ADMIN_USER_IDS", "").replace(",", " ").split()
+ADMIN_USER_IDS: set[int] = {int(x) for x in _admins if x.strip().isdigit()}
+
 # ── Embedding ───────────────────────────────────────────────
 EMBEDDING_MODEL = os.getenv(
     "EMBEDDING_MODEL",

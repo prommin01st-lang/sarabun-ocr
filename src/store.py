@@ -36,6 +36,7 @@ documents = Table(
     Column("summary", Text),
     Column("folder_id", Integer),   # nullable = root/ยังไม่จัดหมวด
     Column("category", String),     # auto จาก LLM ตอน ingest
+    Column("updated_at", Float),    # เวลาที่แก้ไขล่าสุด (/update)
 )
 
 folders = Table(
@@ -43,6 +44,16 @@ folders = Table(
     Column("id", Integer, primary_key=True, autoincrement=True),
     Column("name", String, nullable=False),
     Column("parent_id", Integer),   # เผื่อ hierarchy อนาคต (ตอนนี้ใช้ flat)
+    Column("created_at", Float),
+)
+
+action_logs = Table(
+    "action_logs", metadata,
+    Column("id", Integer, primary_key=True, autoincrement=True),
+    Column("action", String, nullable=False),   # ingest / update / delete / query
+    Column("doc_id", Integer),                   # nullable
+    Column("actor", String),                     # id/username คนที่ทำ — nullable (เผื่อ RBAC)
+    Column("detail", String),                    # nullable
     Column("created_at", Float),
 )
 
@@ -67,6 +78,8 @@ def init_db() -> None:
             c.execute(text("ALTER TABLE documents ADD COLUMN folder_id INTEGER"))
         if "category" not in cols:
             c.execute(text("ALTER TABLE documents ADD COLUMN category VARCHAR"))
+        if "updated_at" not in cols:
+            c.execute(text("ALTER TABLE documents ADD COLUMN updated_at FLOAT"))
 
 
 # ── hashing ─────────────────────────────────────────────────
@@ -152,9 +165,40 @@ def set_category(doc_id: int, category: str) -> None:
         c.execute(update(documents).where(documents.c.id == doc_id).values(category=category))
 
 
+def replace_document(doc_id: int, *, sha256: str, filename: str, mime_type: str,
+                     doc_type: str, bytes: int, extracted_path: str) -> None:
+    """แทนที่เนื้อหาเอกสาร (คง id/folder/เจ้าของ/created_at เดิม) + ตั้ง updated_at."""
+    with _get_engine().begin() as c:
+        c.execute(update(documents).where(documents.c.id == doc_id).values(
+            sha256=sha256, filename=filename, mime_type=mime_type, doc_type=doc_type,
+            bytes=bytes, extracted_path=extracted_path, status="indexed",
+            updated_at=time.time(),
+        ))
+
+
 def delete(doc_id: int) -> None:
     with _get_engine().begin() as c:
         c.execute(sa_delete(documents).where(documents.c.id == doc_id))
+
+
+# ── Action log (audit) ──────────────────────────────────────
+def log_action(action: str, doc_id: Optional[int] = None,
+               actor: Optional[str] = None, detail: Optional[str] = None) -> None:
+    """บันทึก action ลง audit log (actor = id/ชื่อคนที่ทำ, nullable)."""
+    try:
+        with _get_engine().begin() as c:
+            c.execute(insert(action_logs).values(
+                action=action, doc_id=doc_id, actor=actor,
+                detail=detail, created_at=time.time()))
+    except Exception:  # noqa: BLE001 — log ล้มไม่ควรทำให้งานหลักพัง
+        pass
+
+
+def list_logs(limit: int = 50) -> list:
+    with _get_engine().connect() as c:
+        return list(c.execute(
+            select(action_logs).order_by(action_logs.c.created_at.desc()).limit(limit)
+        ).mappings().all())
 
 
 def list_docs(limit: int = 50) -> list:

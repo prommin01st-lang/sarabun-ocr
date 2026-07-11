@@ -36,6 +36,7 @@ WELCOME = (
     "• /folder <ชื่อ> → ตั้งโฟลเดอร์ให้ไฟล์ที่จะส่งต่อไป (/folder - = ยกเลิก)\n"
     "• /doc <id> → สรุป + ถามเจาะไฟล์นั้น\n"
     "• /cat <หมวด> → ถามเจาะทั้งหมวด (/cat = ดูรายการหมวด) · /infolder <โฟลเดอร์> → ถามเจาะทั้งโฟลเดอร์\n"
+    "• /update <id> → แทนที่เนื้อหา (ส่งไฟล์ใหม่ตามมา) · /rm <id> → ลบเอกสาร\n"
     "• /all → กลับถามทั้งคลัง · /summarize <คำค้น> → สรุปเอกสารที่เกี่ยวข้อง"
 )
 
@@ -60,6 +61,16 @@ def restricted(handler):
         return await handler(update, ctx)
 
     return wrapper
+
+
+def _can_edit(update: Update, row) -> bool:
+    """เจ้าของไฟล์ (source_user) หรือ admin เท่านั้นที่แก้/ลบได้."""
+    user = update.effective_user
+    if user and user.id in config.ADMIN_USER_IDS:
+        return True
+    owner = row["source_user"]
+    requester = (user.username or str(user.id)) if user else None
+    return owner is not None and owner == requester
 
 
 # ── commands ────────────────────────────────────────────────
@@ -171,11 +182,65 @@ async def cmd_doc(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
 
 @restricted
 async def cmd_all(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    ctx.user_data.pop("update_target", None)
     s = ctx.user_data.pop("scope", None)
     if s:
         await update.message.reply_text(f"↩️ ออกจากโหมด {s['label']} — ถามจากทั้งคลังได้แล้ว")
     else:
         await update.message.reply_text("ถามจากทั้งคลังได้เลย")
+
+
+@restricted
+async def cmd_update(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    if not ctx.args or not ctx.args[0].isdigit():
+        await update.message.reply_text("ใช้: /update <id> แล้วส่งไฟล์ใหม่ตามมา")
+        return
+    doc_id = int(ctx.args[0])
+    row = await _run(store.get, doc_id)
+    if not row:
+        await update.message.reply_text(f"ไม่พบเอกสาร id={doc_id}")
+        return
+    if not _can_edit(update, row):
+        await update.message.reply_text("⛔ แก้ได้เฉพาะเจ้าของไฟล์หรือ admin")
+        return
+    ctx.user_data["update_target"] = doc_id
+    await update.message.reply_text(
+        f"✏️ ส่งไฟล์ใหม่มาแทนที่ [{doc_id}] «{row['filename']}» ได้เลย · ยกเลิก: /all")
+
+
+@restricted
+async def cmd_rm(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    if not ctx.args or not ctx.args[0].isdigit():
+        await update.message.reply_text("ใช้: /rm <id>")
+        return
+    doc_id = int(ctx.args[0])
+    row = await _run(store.get, doc_id)
+    if not row:
+        await update.message.reply_text(f"ไม่พบเอกสาร id={doc_id}")
+        return
+    if not _can_edit(update, row):
+        await update.message.reply_text("⛔ ลบได้เฉพาะเจ้าของไฟล์หรือ admin")
+        return
+    actor = update.effective_user.username or str(update.effective_user.id)
+    await _run(pipeline.delete_document, doc_id, actor)
+    await update.message.reply_text(f"🗑️ ลบ [{doc_id}] «{row['filename']}» แล้ว")
+
+
+@restricted
+async def cmd_log(update: Update, _ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    if update.effective_user.id not in config.ADMIN_USER_IDS:
+        await update.message.reply_text("⛔ ดู log ได้เฉพาะ admin")
+        return
+    rows = await _run(store.list_logs, 20)
+    if not rows:
+        await update.message.reply_text("ยังไม่มี log")
+        return
+    lines = ["🧾 Action log (ล่าสุด):"]
+    for r in rows:
+        who = r["actor"] or "-"
+        did = f" doc[{r['doc_id']}]" if r["doc_id"] is not None else ""
+        lines.append(f"• {r['action']}{did} · โดย {who}" + (f" · {r['detail']}" if r["detail"] else ""))
+    await update.message.reply_text("\n".join(lines))
 
 
 @restricted
@@ -265,6 +330,31 @@ async def _ingest_and_reply(update: Update, ctx: ContextTypes.DEFAULT_TYPE,
     await update.message.reply_text(msg)
 
 
+async def _update_and_reply(update: Update, local_path: str, filename: str, doc_id: int) -> None:
+    await update.message.reply_text(f"✏️ กำลังอัปเดต [{doc_id}] ด้วย {filename} ...")
+    res = await _run(pipeline.update_file, doc_id, local_path, filename)
+    s = res["status"]
+    if s == "updated":
+        msg = f"✅ อัปเดต [{doc_id}] แล้ว: {filename}\nชนิด: {res['doc_type']} · {res['n_chunks']} chunks"
+        if res.get("category"):
+            msg += f" · 🏷️ {res['category']}"
+        if res.get("summary"):
+            msg += f"\n\n📝 {res['summary']}"
+    elif s == "unchanged":
+        msg = "ℹ️ ไฟล์ใหม่เนื้อหาเหมือนเดิม — ไม่มีการเปลี่ยนแปลง"
+    elif s == "conflict":
+        msg = f"⚠️ เนื้อหานี้ตรงกับเอกสาร id={res['other_id']} ที่มีอยู่แล้ว"
+    elif s == "too_large":
+        msg = f"⚠️ ไฟล์ใหญ่เกิน {res['max_mb']}MB (ไฟล์นี้ {res['size_mb']}MB)"
+    elif s == "unsupported":
+        msg = f"⚠️ ยังไม่รองรับไฟล์ชนิดนี้: {filename}"
+    elif s == "notfound":
+        msg = f"ไม่พบเอกสาร id={doc_id}"
+    else:
+        msg = f"❌ อัปเดตไม่สำเร็จ: {res.get('error', '')[:300]}"
+    await update.message.reply_text(msg)
+
+
 @restricted
 async def on_document(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     doc = update.message.document
@@ -272,7 +362,12 @@ async def on_document(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     with tempfile.TemporaryDirectory() as tmp:
         local = Path(tmp) / (doc.file_name or f"{doc.file_unique_id}")
         await tg_file.download_to_drive(str(local))
-        await _ingest_and_reply(update, ctx, str(local), doc.file_name or local.name)
+        name = doc.file_name or local.name
+        target = ctx.user_data.pop("update_target", None)
+        if target is not None:
+            await _update_and_reply(update, str(local), name, target)
+        else:
+            await _ingest_and_reply(update, ctx, str(local), name)
 
 
 @restricted
@@ -282,7 +377,11 @@ async def on_photo(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     with tempfile.TemporaryDirectory() as tmp:
         local = Path(tmp) / f"{photo.file_unique_id}.jpg"
         await tg_file.download_to_drive(str(local))
-        await _ingest_and_reply(update, ctx, str(local), local.name)
+        target = ctx.user_data.pop("update_target", None)
+        if target is not None:
+            await _update_and_reply(update, str(local), local.name, target)
+        else:
+            await _ingest_and_reply(update, ctx, str(local), local.name)
 
 
 # ── chat Q&A ────────────────────────────────────────────────
@@ -302,6 +401,8 @@ async def on_text(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
             kwargs = {"doc_ids": await _run(store.doc_ids, scope["category"], None)}
         elif scope["kind"] == "folder":
             kwargs = {"doc_ids": await _run(store.doc_ids, None, scope["folder_id"])}
+    actor = update.effective_user.username or str(update.effective_user.id)
+    await _run(store.log_action, "query", None, actor, question[:120])
     await update.message.chat.send_action("typing")
     try:
         res = await _run(rag.answer, question, **kwargs)
@@ -334,6 +435,9 @@ def main() -> None:
     app.add_handler(CommandHandler("mkfolder", cmd_mkfolder))
     app.add_handler(CommandHandler("mv", cmd_mv))
     app.add_handler(CommandHandler("folder", cmd_folder))
+    app.add_handler(CommandHandler("update", cmd_update))
+    app.add_handler(CommandHandler("rm", cmd_rm))
+    app.add_handler(CommandHandler("log", cmd_log))
     app.add_handler(CommandHandler("summarize", cmd_summarize))
     app.add_handler(MessageHandler(filters.Document.ALL, on_document))
     app.add_handler(MessageHandler(filters.PHOTO, on_photo))
