@@ -22,6 +22,8 @@ SUMMARY_SYSTEM = (
 
 # สรุปทั้งเอกสารเป็นหัวข้อ (bullet) — จำกัดความยาว input กัน context เกิน
 DOC_TEXT_CAP = 12000
+MAP_WINDOW = 6000        # ขนาดต่อ "ส่วน" ตอน map-reduce (เอกสารยาว)
+MAP_MAX_WINDOWS = 20     # กันเอกสารยักษ์เรียก LLM เยอะเกินไป (สรุปครอบ N ส่วนแรก)
 
 DESCRIBE_SYSTEM = (
     "คุณเป็นผู้ช่วยอธิบายเอกสารภาษาไทย ตอบสั้นกระชับ อ้างจากเนื้อหาที่ให้เท่านั้น ไม่แต่งเพิ่ม"
@@ -159,15 +161,47 @@ def summarize_document(doc_id: int, extracted_path: Optional[str] = None,
     if not text.strip():
         return {"answer": "เอกสารนี้ไม่มีเนื้อหาให้สรุป", "sources": [filename] if filename else []}
 
-    prompt = (
+    src = [filename] if filename else []
+    # เอกสารสั้น → สรุปทีเดียว (เร็ว)
+    if len(text) <= DOC_TEXT_CAP:
+        return {"answer": _ollama_generate(_reduce_prompt(text, filename),
+                                           model=config.SUMMARY_MODEL), "sources": src}
+
+    # เอกสารยาว → map-reduce: สรุปทีละส่วน แล้วรวมเป็นสรุปเดียว → ครอบทุกหน้า
+    windows = vectordb.chunk_text(text, size=MAP_WINDOW, overlap=200)
+    truncated = len(windows) > MAP_MAX_WINDOWS
+    windows = windows[:MAP_MAX_WINDOWS]
+    partials = []
+    for i, w in enumerate(windows, 1):
+        mp = (
+            f"{SUMMARY_SYSTEM}\n\n"
+            f"สรุปเนื้อหาส่วนที่ {i}/{len(windows)} ของเอกสารนี้เป็น bullet สั้นๆ "
+            "เก็บสาระ/ตัวเลข/ชื่อ/ข้อกำหนดสำคัญไว้:\n"
+            f"=== ส่วนที่ {i} ===\n{w}\n\n=== สรุปส่วนนี้ ==="
+        )
+        partials.append(_ollama_generate(mp, model=config.SUMMARY_MODEL))
+
+    combined = "\n\n".join(partials)
+    final = _ollama_generate(
+        f"{SUMMARY_SYSTEM}\n\n"
+        "รวม 'สรุปย่อยของแต่ละส่วน' ต่อไปนี้ให้เป็นสรุปภาพรวมของทั้งเอกสาร "
+        "จัดเป็น **หัวข้อหลัก** + bullet ย่อย ไม่ซ้ำ ครอบคลุมทุกส่วน ใช้รูปแบบ 📌 หัวข้อ / • ประเด็น:\n"
+        f"=== สรุปย่อยแต่ละส่วน ===\n{combined[:DOC_TEXT_CAP]}\n\n=== สรุปภาพรวม ===",
+        model=config.SUMMARY_MODEL,
+    )
+    if truncated:
+        final += f"\n\n(⚠️ เอกสารยาวมาก — สรุปครอบ {MAP_MAX_WINDOWS} ส่วนแรก)"
+    return {"answer": final, "sources": src}
+
+
+def _reduce_prompt(text: str, filename: str) -> str:
+    return (
         f"{SUMMARY_SYSTEM}\n\n"
         "สรุปเอกสารต่อไปนี้เป็น **หัวข้อหลัก** พร้อม bullet ย่อย 2-4 ข้อใต้แต่ละหัวข้อ "
         "ครอบคลุมสาระสำคัญทั้งหมด ใช้รูปแบบ:\n"
         "📌 <หัวข้อ>\n  • <ประเด็น>\n\n"
         f"=== เอกสาร: {filename} ===\n{text[:DOC_TEXT_CAP]}\n\n=== สรุปเป็นหัวข้อ ==="
     )
-    return {"answer": _ollama_generate(prompt, model=config.SUMMARY_MODEL),
-            "sources": [filename] if filename else []}
 
 
 def summarize(query: str, k: int = 8) -> dict:

@@ -21,6 +21,39 @@ Telegram ──file──► router (magic) ──► extractor ──► SQLite
 
 > **หมายเหตุ PaddleOCR:** บาง CPU build ของ paddlepaddle ชน oneDNN bug — โค้ดตั้ง `FLAGS_use_mkldnn=0` + `enable_mkldnn=False` ให้อัตโนมัติแล้ว
 
+## Spec โมเดล AI (ต้องมีอะไรบ้าง)
+
+ระบบใช้โมเดล AI 3 ตัว ทำงาน **local** ทั้งหมด:
+
+| โมเดล | หน้าที่ | ขนาดไฟล์ | RAM ที่ใช้รัน | หมายเหตุ |
+|-------|--------|---------|--------------|---------|
+| **Ollama `qwen2.5:3b`** | สรุป / ตอบคำถาม (LLM) | ~1.9 GB | ~3–4 GB | context 8192 tokens (ปรับได้), ภาษาไทยดี |
+| **`paraphrase-multilingual-MiniLM-L12-v2`** | embedding (ค้นหา semantic) | ~470 MB | ~1 GB | 384 มิติ, รองรับ 50+ ภาษา, CPU ได้ |
+| **PaddleOCR PP-OCRv5 (`th`)** | OCR รูปเดี่ยว | ~few hundred MB (โหลดครั้งแรก) | ~1–2 GB ตอนรัน | เฉพาะไฟล์รูป, CPU ได้ |
+
+**รวมพื้นที่ดิสก์โมเดล: ~3 GB** (+ ข้อมูลใน `data/`)
+
+### Spec เครื่องขั้นต่ำ / แนะนำ
+| RAM | LLM ที่ใช้ได้ | ได้อะไร |
+|-----|--------------|---------|
+| **≤ 8 GB** (ไม่มี GPU) | `qwen2.5:3b` (default) | ✅ ครบทุกฟีเจอร์ — เป็นค่ามาตรฐานของโปรเจกต์ |
+| **16 GB** | `qwen2.5:7b` | สรุป/จัดหมวดแม่นขึ้น (ตั้ง `SUMMARY_MODEL=qwen2.5:7b`) |
+| **32 GB+ หรือมี GPU** | `qwen2.5:14b`+ | คุณภาพสูงสุด · GPU ทำให้เร็วขึ้นมาก |
+
+- **GPU: ไม่บังคับ** — ถ้ามี Ollama/embedding จะใช้อัตโนมัติ (เร็วขึ้น) ถ้าไม่มีก็รันบน CPU ได้
+- **runtime อื่น (ไม่ใช่โมเดล):** Java 11+ (opendataloader), LibreOffice (`.doc` เก่า)
+
+### สลับโมเดล (ทุกตัวปรับใน `.env` ไม่ต้องแก้โค้ด)
+```bash
+OLLAMA_MODEL=qwen2.5:3b       # LLM หลักทุก task
+ANSWER_MODEL=qwen2.5:3b       # แยกโมเดลตอนตอบ (เว้นว่าง = OLLAMA_MODEL)
+SUMMARY_MODEL=qwen2.5:7b      # แยกโมเดลตอนสรุป/จัดหมวด
+EMBEDDING_MODEL=...           # ⚠️ เปลี่ยนแล้วต้อง re-index (มิติ vector เปลี่ยน)
+LLM_NUM_CTX=8192              # context window · LLM_TEMPERATURE=0.2 · LLM_NUM_PREDICT=1024
+```
+
+> **เอกสารยาว:** ระบบใช้ **map-reduce summarization** — เอกสาร >12,000 ตัวอักษรจะถูกสรุปทีละส่วนแล้วรวมกัน → สรุปได้ครบทุกหน้า (การถาม-ตอบ scale ได้อยู่แล้วผ่าน RAG retrieval)
+
 ## ติดตั้ง
 ```bash
 python3 -m venv .venv && source .venv/bin/activate
