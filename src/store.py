@@ -10,7 +10,8 @@ from typing import Optional
 
 from sqlalchemy import (
     Column, Float, Integer, MetaData, String, Table, Text,
-    create_engine, delete as sa_delete, insert, select, update,
+    create_engine, delete as sa_delete, insert, inspect as sa_inspect,
+    select, text, update,
 )
 from sqlalchemy.engine import Engine
 
@@ -33,6 +34,15 @@ documents = Table(
     Column("created_at", Float),
     Column("extracted_path", String),
     Column("summary", Text),
+    Column("folder_id", Integer),   # nullable = root/ยังไม่จัดหมวด
+)
+
+folders = Table(
+    "folders", metadata,
+    Column("id", Integer, primary_key=True, autoincrement=True),
+    Column("name", String, nullable=False),
+    Column("parent_id", Integer),   # เผื่อ hierarchy อนาคต (ตอนนี้ใช้ flat)
+    Column("created_at", Float),
 )
 
 _engine: Optional[Engine] = None
@@ -47,7 +57,13 @@ def _get_engine() -> Engine:
 
 
 def init_db() -> None:
-    metadata.create_all(_get_engine())
+    eng = _get_engine()
+    metadata.create_all(eng)  # สร้างตาราง documents/folders ที่ยังไม่มี
+    # migration: เพิ่ม folder_id ให้ตาราง documents เดิมที่ยังไม่มี
+    cols = {c["name"] for c in sa_inspect(eng).get_columns("documents")}
+    if "folder_id" not in cols:
+        with eng.begin() as c:
+            c.execute(text("ALTER TABLE documents ADD COLUMN folder_id INTEGER"))
 
 
 # ── hashing ─────────────────────────────────────────────────
@@ -89,6 +105,7 @@ def add(
     bytes: int = 0,
     status: str = "processing",
     extracted_path: Optional[str] = None,
+    folder_id: Optional[int] = None,
 ) -> int:
     """เพิ่มเอกสารใหม่ คืน id. ถ้า sha256 มีแล้ว คืน id เดิม (ไม่เขียนซ้ำ)."""
     existing = get_by_hash(sha256)
@@ -101,6 +118,7 @@ def add(
                 doc_type=doc_type, source_chat=source_chat, source_user=source_user,
                 bytes=bytes, status=status, n_chunks=0,
                 created_at=time.time(), extracted_path=extracted_path,
+                folder_id=folder_id,
             )
         )
         return int(result.inserted_primary_key[0])
@@ -136,3 +154,35 @@ def list_docs(limit: int = 50) -> list:
         return list(c.execute(
             select(documents).order_by(documents.c.created_at.desc()).limit(limit)
         ).mappings().all())
+
+
+# ── Folders ─────────────────────────────────────────────────
+def get_folder_by_name(name: str):
+    with _get_engine().connect() as c:
+        return c.execute(select(folders).where(folders.c.name == name)).mappings().first()
+
+
+def get_folder(folder_id: int):
+    with _get_engine().connect() as c:
+        return c.execute(select(folders).where(folders.c.id == folder_id)).mappings().first()
+
+
+def create_folder(name: str, parent_id: Optional[int] = None) -> int:
+    """สร้างโฟลเดอร์ (idempotent ตามชื่อ) คืน id."""
+    existing = get_folder_by_name(name)
+    if existing:
+        return int(existing["id"])
+    with _get_engine().begin() as c:
+        r = c.execute(insert(folders).values(
+            name=name, parent_id=parent_id, created_at=time.time()))
+        return int(r.inserted_primary_key[0])
+
+
+def list_folders() -> list:
+    with _get_engine().connect() as c:
+        return list(c.execute(select(folders).order_by(folders.c.name)).mappings().all())
+
+
+def move_document(doc_id: int, folder_id: Optional[int]) -> None:
+    with _get_engine().begin() as c:
+        c.execute(update(documents).where(documents.c.id == doc_id).values(folder_id=folder_id))

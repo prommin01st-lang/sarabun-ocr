@@ -18,6 +18,7 @@ def ingest_file(
     filename: str,
     source_chat: Optional[str] = None,
     source_user: Optional[str] = None,
+    folder_id: Optional[int] = None,
 ) -> dict:
     """รับ path ไฟล์ในเครื่อง → เก็บเข้า SSoT.
 
@@ -65,7 +66,7 @@ def ingest_file(
     doc_id = store.add(
         sha256=sha, filename=filename, mime_type=mime, doc_type=doc_type,
         source_chat=source_chat, source_user=source_user, bytes=len(data),
-        status="processing",
+        status="processing", folder_id=folder_id,
     )
 
     try:

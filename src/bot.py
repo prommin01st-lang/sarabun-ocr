@@ -31,9 +31,10 @@ WELCOME = (
     "คำสั่ง:\n"
     "• ส่งไฟล์ → เก็บเข้าคลัง\n"
     "• พิมพ์คำถาม → ผมตอบจากเอกสารที่มี\n"
-    "• /list → ดูเอกสารที่เก็บไว้\n"
-    "• /doc <id> → สรุปเอกสารนั้นเป็นหัวข้อ + เข้าโหมดถามเจาะไฟล์นั้น\n"
-    "• /all → กลับไปถามจากทั้งคลัง\n"
+    "• /list → ดูคลัง (จัดเป็นโฟลเดอร์)\n"
+    "• /mkfolder <ชื่อ> → สร้างโฟลเดอร์ · /mv <id> <โฟลเดอร์> → ย้ายไฟล์\n"
+    "• /folder <ชื่อ> → ตั้งโฟลเดอร์ให้ไฟล์ที่จะส่งต่อไป (/folder - = ยกเลิก)\n"
+    "• /doc <id> → สรุป + เข้าโหมดถามเจาะไฟล์นั้น · /all → กลับทั้งคลัง\n"
     "• /summarize <คำค้น> → สรุปเอกสารที่เกี่ยวข้อง"
 )
 
@@ -66,18 +67,80 @@ async def cmd_start(update: Update, _ctx: ContextTypes.DEFAULT_TYPE) -> None:
     await update.message.reply_text(WELCOME)
 
 
+def _doc_line(d) -> str:
+    icon = {"indexed": "✅", "failed": "❌", "processing": "⏳"}.get(d["status"], "•")
+    return f"   {icon} [{d['id']}] {d['filename'][:40]} ({d['n_chunks']})"
+
+
 @restricted
 async def cmd_list(update: Update, _ctx: ContextTypes.DEFAULT_TYPE) -> None:
-    rows = await _run(store.list_docs, 30)
-    if not rows:
-        await update.message.reply_text("ยังไม่มีเอกสารในคลัง")
+    rows = await _run(store.list_docs, 200)
+    flist = await _run(store.list_folders)
+    if not rows and not flist:
+        await update.message.reply_text("ยังไม่มีเอกสารในคลัง — ส่งไฟล์มาได้เลย")
         return
-    lines = ["📚 เอกสารในคลัง:"]
+
+    by_folder: dict = {}
     for r in rows:
-        icon = {"indexed": "✅", "failed": "❌", "processing": "⏳"}.get(r["status"], "•")
-        lines.append(f"{icon} [{r['id']}] {r['filename']} ({r['doc_type']}, {r['n_chunks']} chunks)")
-    lines.append("\n💡 /doc <id> เพื่อสรุป + ถามเจาะรายไฟล์")
+        by_folder.setdefault(r["folder_id"], []).append(r)
+
+    lines = ["📚 คลังเอกสาร\n"]
+    for f in flist:  # โฟลเดอร์ → ไฟล์ข้างใน
+        docs = by_folder.get(f["id"], [])
+        lines.append(f"📁 {f['name']} ({len(docs)})")
+        lines += [_doc_line(d) for d in docs] if docs else ["   (ว่าง)"]
+    root = by_folder.get(None, [])  # ไฟล์ที่ยังไม่จัดหมวด
+    if root:
+        lines.append(f"📂 ยังไม่จัดหมวด ({len(root)})")
+        lines += [_doc_line(d) for d in root]
+
+    lines.append("\n💡 /mkfolder <ชื่อ> · /mv <id> <โฟลเดอร์> · /doc <id>")
     await update.message.reply_text("\n".join(lines))
+
+
+@restricted
+async def cmd_mkfolder(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    name = " ".join(ctx.args).strip()
+    if not name:
+        await update.message.reply_text("ใช้: /mkfolder <ชื่อโฟลเดอร์>")
+        return
+    await _run(store.create_folder, name)
+    await update.message.reply_text(f"📁 สร้างโฟลเดอร์ «{name}» แล้ว")
+
+
+@restricted
+async def cmd_mv(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    if len(ctx.args) < 2 or not ctx.args[0].isdigit():
+        await update.message.reply_text("ใช้: /mv <id> <โฟลเดอร์>  (ใช้ - เพื่อเอาออกจากโฟลเดอร์)")
+        return
+    doc_id = int(ctx.args[0])
+    row = await _run(store.get, doc_id)
+    if not row:
+        await update.message.reply_text(f"ไม่พบเอกสาร id={doc_id}")
+        return
+    target = " ".join(ctx.args[1:]).strip()
+    if target in ("-", "/", "root"):
+        await _run(store.move_document, doc_id, None)
+        await update.message.reply_text(f"↩️ ย้าย [{doc_id}] ออกจากโฟลเดอร์แล้ว")
+    else:
+        fid = await _run(store.create_folder, target)
+        await _run(store.move_document, doc_id, fid)
+        await update.message.reply_text(f"📁 ย้าย [{doc_id}] → «{target}»")
+
+
+@restricted
+async def cmd_folder(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    """ตั้งโฟลเดอร์ปลายทางของไฟล์ที่จะส่งต่อไป (ต่อผู้ใช้)."""
+    if not ctx.args or ctx.args[0] in ("-", "/"):
+        ctx.user_data.pop("upload_folder_id", None)
+        ctx.user_data.pop("upload_folder_name", None)
+        await update.message.reply_text("📂 ไฟล์ที่ส่งต่อไปจะเข้า 'ยังไม่จัดหมวด'")
+        return
+    name = " ".join(ctx.args).strip()
+    fid = await _run(store.create_folder, name)
+    ctx.user_data["upload_folder_id"] = fid
+    ctx.user_data["upload_folder_name"] = name
+    await update.message.reply_text(f"📁 ไฟล์ที่ส่งต่อไปจะเข้าโฟลเดอร์ «{name}»")
 
 
 @restricted
@@ -124,7 +187,10 @@ async def cmd_summarize(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
 
 
 # ── file ingest ─────────────────────────────────────────────
-async def _ingest_and_reply(update: Update, local_path: str, filename: str) -> None:
+async def _ingest_and_reply(update: Update, ctx: ContextTypes.DEFAULT_TYPE,
+                            local_path: str, filename: str) -> None:
+    folder_id = ctx.user_data.get("upload_folder_id")
+    folder_name = ctx.user_data.get("upload_folder_name")
     await update.message.reply_text(f"📥 กำลังประมวลผล: {filename} ...")
     res = await _run(
         pipeline.ingest_file,
@@ -132,10 +198,13 @@ async def _ingest_and_reply(update: Update, local_path: str, filename: str) -> N
         filename,
         str(update.effective_chat.id),
         update.effective_user.username or str(update.effective_user.id),
+        folder_id,
     )
     status = res["status"]
     if status == "indexed":
         msg = f"✅ เก็บแล้ว: {filename}\nชนิด: {res['doc_type']} · {res['n_chunks']} chunks"
+        if folder_name:
+            msg += f" · 📁 {folder_name}"
         if res.get("summary"):
             msg += f"\n\n📝 {res['summary']}"
     elif status == "duplicate":
@@ -156,7 +225,7 @@ async def on_document(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     with tempfile.TemporaryDirectory() as tmp:
         local = Path(tmp) / (doc.file_name or f"{doc.file_unique_id}")
         await tg_file.download_to_drive(str(local))
-        await _ingest_and_reply(update, str(local), doc.file_name or local.name)
+        await _ingest_and_reply(update, ctx, str(local), doc.file_name or local.name)
 
 
 @restricted
@@ -166,7 +235,7 @@ async def on_photo(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     with tempfile.TemporaryDirectory() as tmp:
         local = Path(tmp) / f"{photo.file_unique_id}.jpg"
         await tg_file.download_to_drive(str(local))
-        await _ingest_and_reply(update, str(local), local.name)
+        await _ingest_and_reply(update, ctx, str(local), local.name)
 
 
 # ── chat Q&A ────────────────────────────────────────────────
@@ -205,6 +274,9 @@ def main() -> None:
     app.add_handler(CommandHandler("list", cmd_list))
     app.add_handler(CommandHandler("doc", cmd_doc))
     app.add_handler(CommandHandler("all", cmd_all))
+    app.add_handler(CommandHandler("mkfolder", cmd_mkfolder))
+    app.add_handler(CommandHandler("mv", cmd_mv))
+    app.add_handler(CommandHandler("folder", cmd_folder))
     app.add_handler(CommandHandler("summarize", cmd_summarize))
     app.add_handler(MessageHandler(filters.Document.ALL, on_document))
     app.add_handler(MessageHandler(filters.PHOTO, on_photo))

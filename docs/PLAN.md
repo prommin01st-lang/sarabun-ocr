@@ -238,7 +238,7 @@ OCR-File-Chat/
 
 **ออกแบบไว้แล้ว (ดู ADR + AUDIT):**
 - ✅ [PostgreSQL store](./ARCHITECTURE.md#adr-008) — **implemented ผ่าน Docker** (`docker-compose.yml`, host:5434), store.py = SQLAlchemy Core, migrate รักษา doc_id เสร็จ · บอทรัน backend=postgresql แล้ว
-- [Folder + หมวดหมู่](./ARCHITECTURE.md#adr-009) — โฟลเดอร์ (tree) + auto-category ตอน ingest
+- 🟡 [Folder + หมวดหมู่](./ARCHITECTURE.md#adr-009) — **Folders + `/list` tree + `/mkfolder`/`/mv`/`/folder` เสร็จ**; auto-category ยังไม่ทำ
 - [RBAC](./ARCHITECTURE.md#adr-010) — users/roles ต่อยอด `ALLOWED_USER_IDS`
 - [Audit ความเสี่ยง + module ที่จำเป็น](./AUDIT.md) — เร่งด่วน: file-size guard (R1), sanitize PII (R2)
 
