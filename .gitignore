@@ -1,0 +1,33 @@
+# Secrets
+.env
+
+# Data (ไฟล์ผู้ใช้ + db + vector store)
+data/raw/
+data/extracted/
+data/chroma/
+data/*.db
+data/*.db-*
+
+# Vendored source
+external/
+
+# Installed skills / agent tooling (third-party, ผ่าน npx skills)
+.agents/
+.claude/
+skills-lock.json
+
+# Test data — เอกสารจริง ไม่ commit ขึ้น public repo
+Test DataPDF/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+env/
+.pytest_cache/
+
+# OS / editor
+.DS_Store
+*.swp

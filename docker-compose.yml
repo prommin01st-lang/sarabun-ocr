@@ -1,0 +1,26 @@
+# Postgres สำหรับ OCR-File-Chat (metadata store)
+# host 5434 → เลี่ยงชน PG ของเครื่อง (5432/5433)
+# start:  docker compose up -d
+# stop:   docker compose down          (เก็บข้อมูลใน volume)
+# reset:  docker compose down -v        (ลบข้อมูลทั้งหมด)
+services:
+  postgres:
+    image: postgres:17-alpine
+    container_name: ocr-file-chat-pg
+    environment:
+      POSTGRES_DB: ocr_file_chat
+      POSTGRES_USER: ocr
+      POSTGRES_PASSWORD: ocr_local_pw
+    ports:
+      - "5434:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ocr -d ocr_file_chat"]
+      interval: 5s
+      timeout: 3s
+      retries: 15
+
+volumes:
+  pgdata:

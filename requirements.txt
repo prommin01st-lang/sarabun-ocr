@@ -1,0 +1,23 @@
+# ── Extraction ───────────────────────────────────────────────
+opendataloader-pdf              # PDF (text + scanned, OCR ในตัว) — ต้องมี Java 11+
+markitdown[docx,xlsx,pptx]      # Office → markdown (extras จำเป็นสำหรับ docx/xlsx/pptx)
+paddleocr                       # OCR รูปเดี่ยว (skill smart-ocr) — v3.x
+paddlepaddle                    # backend ของ paddleocr (CPU); โค้ดปิด mkldnn เลี่ยง oneDNN bug
+Pillow                          # image handling
+python-magic                    # ตรวจชนิดไฟล์จาก magic bytes (ต้องมี libmagic)
+# ระบบ (ไม่ใช่ pip): LibreOffice (soffice) สำหรับแปลง .doc/.xls/.ppt เก่า → XML สมัยใหม่
+
+# ── Storage / Vector ────────────────────────────────────────
+chromadb                  # vector database (persistent, local)
+sentence-transformers     # embedding: paraphrase-multilingual-MiniLM-L12-v2
+SQLAlchemy>=2.0           # metadata store (รองรับทั้ง SQLite + Postgres)
+psycopg[binary]           # Postgres driver (ใช้เมื่อ DATABASE_URL=postgresql+psycopg://...)
+
+# ── LLM / RAG ───────────────────────────────────────────────
+requests                  # เรียก Ollama REST API
+
+# ── Chat ────────────────────────────────────────────────────
+python-telegram-bot>=20.0 # Telegram bot (async)
+
+# ── Utils ───────────────────────────────────────────────────
+python-dotenv             # โหลด .env
