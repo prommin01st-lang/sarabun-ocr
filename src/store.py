@@ -191,6 +191,17 @@ def list_folders() -> list:
         return list(c.execute(select(folders).order_by(folders.c.name)).mappings().all())
 
 
+def doc_ids(category: Optional[str] = None, folder_id: Optional[int] = None) -> list[int]:
+    """คืน id ของเอกสารที่ indexed แล้ว กรองตามหมวด/โฟลเดอร์ (ไว้ scope retrieval)."""
+    q = select(documents.c.id).where(documents.c.status == "indexed")
+    if category is not None:
+        q = q.where(documents.c.category == category)
+    if folder_id is not None:
+        q = q.where(documents.c.folder_id == folder_id)
+    with _get_engine().connect() as c:
+        return [int(r[0]) for r in c.execute(q).all()]
+
+
 def move_document(doc_id: int, folder_id: Optional[int]) -> None:
     with _get_engine().begin() as c:
         c.execute(update(documents).where(documents.c.id == doc_id).values(folder_id=folder_id))

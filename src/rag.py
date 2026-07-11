@@ -76,12 +76,14 @@ def _sources(hits: list[dict]) -> list[str]:
     return seen
 
 
-def answer(question: str, k: Optional[int] = None, doc_id: Optional[int] = None) -> dict:
-    """ตอบคำถาม. ถ้าระบุ doc_id จะตอบจากเฉพาะเอกสารนั้น (โหมดคุยรายไฟล์)."""
-    hits = vectordb.search(question, k=k, doc_id=doc_id)
+def answer(question: str, k: Optional[int] = None, doc_id: Optional[int] = None,
+           doc_ids: Optional[list] = None) -> dict:
+    """ตอบคำถาม. scope ได้ด้วย doc_id (ไฟล์เดียว) หรือ doc_ids (กลุ่ม เช่นทั้งหมวด/โฟลเดอร์)."""
+    hits = vectordb.search(question, k=k, doc_id=doc_id, doc_ids=doc_ids)
     if not hits:
-        scope = "ในเอกสารนี้" if doc_id is not None else "ในระบบ"
-        return {"answer": f"ไม่พบข้อมูลที่เกี่ยวข้องกับคำถามนี้{scope}", "sources": []}
+        scoped = doc_id is not None or doc_ids is not None
+        where = "ในขอบเขตที่เลือก" if scoped else "ในระบบ"
+        return {"answer": f"ไม่พบข้อมูลที่เกี่ยวข้องกับคำถามนี้{where}", "sources": []}
     text = _ollama_generate(_build_prompt(question, hits), model=config.ANSWER_MODEL)
     return {"answer": text, "sources": _sources(hits)}
 
@@ -100,25 +102,47 @@ def describe_document(text: str, filename: str = "") -> str:
     return _ollama_generate(prompt, model=config.SUMMARY_MODEL)
 
 
-def classify_document(text: str, filename: str = "") -> str:
-    """จัดหมวดเอกสารเป็น 1 หมวดจาก config.CATEGORIES (validate; fallback = หมวดสุดท้าย)."""
-    text = clean_text(text)
+# คำใบ้ต่อหมวด (สำหรับ taxonomy default; หมวดที่ผู้ใช้เพิ่มเองจะไม่มีใบ้ แต่ยังใช้ได้)
+CATEGORY_HINTS = {
+    "ระเบียบ/กฎหมาย": "ระเบียบ ข้อบังคับ กฎหมาย พ.ร.บ. ประกาศใช้บังคับ",
+    "หนังสือราชการ": "บันทึกข้อความ หนังสือติดต่อราชการ มี เรียน/เรื่อง/ส่วนราชการ",
+    "รายงาน": "รายงานผล สรุปผล การประชุม ความคืบหน้า สถิติ",
+    "แบบฟอร์ม": "แบบฟอร์ม/แบบกรอก มีช่องหรือหัวข้อให้กรอกข้อมูล",
+    "ประกาศ": "ประกาศ รับสมัครงาน โฆษณา ประชาสัมพันธ์ เชิญชวน",
+    "สัญญา": "สัญญา ข้อตกลง บันทึกความเข้าใจ MOU คู่สัญญา",
+    "อื่นๆ": "ไม่เข้าหมวดใดข้างต้นชัดเจน",
+}
+
+
+def classify_document(text: str, filename: str = "", overview: str = "") -> str:
+    """จัดหมวดเอกสารเป็น 1 หมวดจาก config.CATEGORIES.
+
+    ใช้ overview (ที่ระบุประเภทเอกสารอยู่แล้ว) เป็นสัญญาณเสริม + hint ต่อหมวด → แม่นขึ้น.
+    validate เสมอ; ถ้าโมเดลตอบนอกลิสต์ → fallback หมวดสุดท้าย.
+    """
     cats = config.CATEGORIES
-    if not text.strip() or not cats:
-        return cats[-1] if cats else ""
+    if not cats:
+        return ""
+    signal = (overview + "\n" + clean_text(text)).strip()
+    if not signal:
+        return cats[-1]
+    listing = "\n".join(
+        f"- {c}" + (f" ({CATEGORY_HINTS[c]})" if c in CATEGORY_HINTS else "")
+        for c in cats
+    )
     prompt = (
-        "จัดหมวดหมู่เอกสารต่อไปนี้ ตอบเป็น**ชื่อหมวดเดียว**จากรายการนี้เท่านั้น "
-        "(ห้ามอธิบาย ห้ามสร้างหมวดใหม่):\n"
-        f"{' | '.join(cats)}\n\n"
-        f"=== เอกสาร: {filename} ===\n{text[:4000]}\n\n=== หมวด ==="
+        "จัดหมวดหมู่เอกสารต่อไปนี้ให้ตรงที่สุด ตอบเป็น**ชื่อหมวดเดียว**จากรายการนี้เท่านั้น "
+        "(คัดลอกชื่อหมวดมาตรงๆ ห้ามอธิบาย ห้ามสร้างหมวดใหม่):\n"
+        f"{listing}\n\n"
+        f"=== เอกสาร: {filename} ===\n{signal[:4000]}\n\n=== หมวดที่ตรงที่สุด ==="
     )
     out = _ollama_generate(
         prompt, model=config.SUMMARY_MODEL,
         options={"num_predict": 24, "temperature": 0.0},
     ).strip()
-    for c in cats:  # match ชื่อหมวดที่โผล่ในคำตอบ
-        if c in out or out in c:
-            return c
+    matches = [c for c in cats if c in out or out in c]
+    if matches:
+        return max(matches, key=len)  # เลือกชื่อที่ตรงยาวสุด กันหมวดสั้นชนะโดยบังเอิญ
     return cats[-1]
 
 

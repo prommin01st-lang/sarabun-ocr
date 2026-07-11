@@ -84,10 +84,17 @@ def index_document(doc_id: int, filename: str, text: str) -> int:
     return len(chunks)
 
 
-def search(query: str, k: Optional[int] = None, doc_id: Optional[int] = None) -> list[dict]:
-    """ค้น semantic. ถ้าระบุ doc_id จะ scope เฉพาะเอกสารนั้น."""
+def search(query: str, k: Optional[int] = None, doc_id: Optional[int] = None,
+           doc_ids: Optional[list] = None) -> list[dict]:
+    """ค้น semantic. scope ได้ด้วย doc_id (ไฟล์เดียว) หรือ doc_ids (กลุ่ม เช่นทั้งหมวด/โฟลเดอร์)."""
     k = k or config.TOP_K
-    where = {"doc_id": doc_id} if doc_id is not None else None
+    where = None
+    if doc_id is not None:
+        where = {"doc_id": doc_id}
+    elif doc_ids is not None:
+        if not doc_ids:            # กลุ่มว่าง → ไม่มีอะไรให้ค้น
+            return []
+        where = {"doc_id": {"$in": list(doc_ids)}}
     res = _get_collection().query(query_embeddings=embed([query]), n_results=k, where=where)
     docs = (res.get("documents") or [[]])[0]
     metas = (res.get("metadatas") or [[]])[0]

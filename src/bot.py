@@ -34,15 +34,16 @@ WELCOME = (
     "• /list → ดูคลัง (จัดเป็นโฟลเดอร์)\n"
     "• /mkfolder <ชื่อ> → สร้างโฟลเดอร์ · /mv <id> <โฟลเดอร์> → ย้ายไฟล์\n"
     "• /folder <ชื่อ> → ตั้งโฟลเดอร์ให้ไฟล์ที่จะส่งต่อไป (/folder - = ยกเลิก)\n"
-    "• /doc <id> → สรุป + เข้าโหมดถามเจาะไฟล์นั้น · /all → กลับทั้งคลัง\n"
-    "• /summarize <คำค้น> → สรุปเอกสารที่เกี่ยวข้อง"
+    "• /doc <id> → สรุป + ถามเจาะไฟล์นั้น\n"
+    "• /cat <หมวด> → ถามเจาะทั้งหมวด (/cat = ดูรายการหมวด) · /infolder <โฟลเดอร์> → ถามเจาะทั้งโฟลเดอร์\n"
+    "• /all → กลับถามทั้งคลัง · /summarize <คำค้น> → สรุปเอกสารที่เกี่ยวข้อง"
 )
 
 
-async def _run(func, *args):
+async def _run(func, *args, **kwargs):
     """รันฟังก์ชัน blocking ใน executor."""
     loop = asyncio.get_running_loop()
-    return await loop.run_in_executor(None, partial(func, *args))
+    return await loop.run_in_executor(None, partial(func, *args, **kwargs))
 
 
 def restricted(handler):
@@ -155,8 +156,8 @@ async def cmd_doc(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         await update.message.reply_text(f"ไม่พบเอกสาร id={doc_id}")
         return
     # เข้าโหมดคุยกับเอกสารนี้
-    ctx.user_data["doc_id"] = doc_id
-    ctx.user_data["doc_name"] = row["filename"]
+    ctx.user_data["scope"] = {"kind": "doc", "doc_id": doc_id,
+                              "label": f"เอกสาร «{row['filename']}»"}
     await update.message.chat.send_action("typing")
     res = await _run(rag.summarize_document, doc_id, row["extracted_path"], row["filename"])
     overview = row["summary"] if "summary" in row.keys() else None
@@ -170,10 +171,53 @@ async def cmd_doc(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
 
 @restricted
 async def cmd_all(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
-    ctx.user_data.pop("doc_id", None)
-    name = ctx.user_data.pop("doc_name", None)
-    msg = f"↩️ ออกจากโหมดเอกสาร «{name}» — ถามจากทั้งคลังได้แล้ว" if name else "ถามจากทั้งคลังได้เลย"
-    await update.message.reply_text(msg)
+    s = ctx.user_data.pop("scope", None)
+    if s:
+        await update.message.reply_text(f"↩️ ออกจากโหมด {s['label']} — ถามจากทั้งคลังได้แล้ว")
+    else:
+        await update.message.reply_text("ถามจากทั้งคลังได้เลย")
+
+
+@restricted
+async def cmd_cat(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    """scope คำถามไปที่เอกสารทั้งหมวด. /cat (ไม่มี arg) = แสดงรายการหมวด."""
+    name = " ".join(ctx.args).strip()
+    if not name:
+        counts: dict = {}
+        for r in await _run(store.list_docs, 500):
+            counts[r["category"] or "—"] = counts.get(r["category"] or "—", 0) + 1
+        lines = ["🏷️ หมวดที่มี (พิมพ์ /cat <หมวด> เพื่อถามเจาะ):"]
+        lines += [f"• {c} ({n})" for c, n in sorted(counts.items())]
+        await update.message.reply_text("\n".join(lines))
+        return
+    ids = await _run(store.doc_ids, name, None)
+    if not ids:
+        await update.message.reply_text(f"ไม่มีเอกสารในหมวด «{name}»")
+        return
+    ctx.user_data["scope"] = {"kind": "cat", "category": name, "label": f"หมวด «{name}»"}
+    await update.message.reply_text(
+        f"🏷️ โหมดหมวด «{name}» ({len(ids)} ไฟล์) — ถาม/สั่งสรุปได้เลย · /all เพื่อออก")
+
+
+@restricted
+async def cmd_infolder(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    """scope คำถามไปที่เอกสารทั้งโฟลเดอร์."""
+    name = " ".join(ctx.args).strip()
+    if not name:
+        await update.message.reply_text("ใช้: /infolder <ชื่อโฟลเดอร์>")
+        return
+    folder = await _run(store.get_folder_by_name, name)
+    if not folder:
+        await update.message.reply_text(f"ไม่พบโฟลเดอร์ «{name}»")
+        return
+    ids = await _run(store.doc_ids, None, folder["id"])
+    if not ids:
+        await update.message.reply_text(f"โฟลเดอร์ «{name}» ยังไม่มีเอกสาร")
+        return
+    ctx.user_data["scope"] = {"kind": "folder", "folder_id": folder["id"],
+                              "label": f"โฟลเดอร์ «{name}»"}
+    await update.message.reply_text(
+        f"📁 โหมดโฟลเดอร์ «{name}» ({len(ids)} ไฟล์) — ถาม/สั่งสรุปได้เลย · /all เพื่อออก")
 
 
 @restricted
@@ -247,13 +291,21 @@ async def on_text(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     question = (update.message.text or "").strip()
     if not question:
         return
-    doc_id = ctx.user_data.get("doc_id")  # None = ถามทั้งคลัง
+    scope = ctx.user_data.get("scope")  # None = ถามทั้งคลัง
+    kwargs: dict = {}
+    label = ""
+    if scope:
+        label = scope["label"]
+        if scope["kind"] == "doc":
+            kwargs = {"doc_id": scope["doc_id"]}
+        elif scope["kind"] == "cat":
+            kwargs = {"doc_ids": await _run(store.doc_ids, scope["category"], None)}
+        elif scope["kind"] == "folder":
+            kwargs = {"doc_ids": await _run(store.doc_ids, None, scope["folder_id"])}
     await update.message.chat.send_action("typing")
     try:
-        res = await _run(rag.answer, question, None, doc_id)
-        prefix = ""
-        if doc_id is not None:
-            prefix = f"🔎 (ในเอกสาร «{ctx.user_data.get('doc_name', doc_id)}»)\n"
+        res = await _run(rag.answer, question, **kwargs)
+        prefix = f"🔎 ({label})\n" if label else ""
         await update.message.reply_text(prefix + _format_answer(res))
     except Exception as e:  # noqa: BLE001
         log.exception("answer failed")
@@ -277,6 +329,8 @@ def main() -> None:
     app.add_handler(CommandHandler("list", cmd_list))
     app.add_handler(CommandHandler("doc", cmd_doc))
     app.add_handler(CommandHandler("all", cmd_all))
+    app.add_handler(CommandHandler("cat", cmd_cat))
+    app.add_handler(CommandHandler("infolder", cmd_infolder))
     app.add_handler(CommandHandler("mkfolder", cmd_mkfolder))
     app.add_handler(CommandHandler("mv", cmd_mv))
     app.add_handler(CommandHandler("folder", cmd_folder))

@@ -91,7 +91,7 @@ def ingest_file(
             if overview:
                 store.set_summary(doc_id, overview)
                 vectordb.index_summary(doc_id, filename, overview)
-            category = rag.classify_document(full_text, filename)
+            category = rag.classify_document(full_text, filename, overview=overview)
             if category:
                 store.set_category(doc_id, category)
         except Exception as e:  # noqa: BLE001
