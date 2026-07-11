@@ -100,6 +100,28 @@ def describe_document(text: str, filename: str = "") -> str:
     return _ollama_generate(prompt, model=config.SUMMARY_MODEL)
 
 
+def classify_document(text: str, filename: str = "") -> str:
+    """จัดหมวดเอกสารเป็น 1 หมวดจาก config.CATEGORIES (validate; fallback = หมวดสุดท้าย)."""
+    text = clean_text(text)
+    cats = config.CATEGORIES
+    if not text.strip() or not cats:
+        return cats[-1] if cats else ""
+    prompt = (
+        "จัดหมวดหมู่เอกสารต่อไปนี้ ตอบเป็น**ชื่อหมวดเดียว**จากรายการนี้เท่านั้น "
+        "(ห้ามอธิบาย ห้ามสร้างหมวดใหม่):\n"
+        f"{' | '.join(cats)}\n\n"
+        f"=== เอกสาร: {filename} ===\n{text[:4000]}\n\n=== หมวด ==="
+    )
+    out = _ollama_generate(
+        prompt, model=config.SUMMARY_MODEL,
+        options={"num_predict": 24, "temperature": 0.0},
+    ).strip()
+    for c in cats:  # match ชื่อหมวดที่โผล่ในคำตอบ
+        if c in out or out in c:
+            return c
+    return cats[-1]
+
+
 def summarize_document(doc_id: int, extracted_path: Optional[str] = None,
                        filename: str = "") -> dict:
     """สรุปทั้งเอกสารเป็นหัวข้อ + bullet ย่อย (อ่านจากไฟล์ที่สกัดไว้ ถ้าไม่มีค่อยประกอบจาก chunks)."""

@@ -35,6 +35,7 @@ documents = Table(
     Column("extracted_path", String),
     Column("summary", Text),
     Column("folder_id", Integer),   # nullable = root/ยังไม่จัดหมวด
+    Column("category", String),     # auto จาก LLM ตอน ingest
 )
 
 folders = Table(
@@ -61,9 +62,11 @@ def init_db() -> None:
     metadata.create_all(eng)  # สร้างตาราง documents/folders ที่ยังไม่มี
     # migration: เพิ่ม folder_id ให้ตาราง documents เดิมที่ยังไม่มี
     cols = {c["name"] for c in sa_inspect(eng).get_columns("documents")}
-    if "folder_id" not in cols:
-        with eng.begin() as c:
+    with eng.begin() as c:
+        if "folder_id" not in cols:
             c.execute(text("ALTER TABLE documents ADD COLUMN folder_id INTEGER"))
+        if "category" not in cols:
+            c.execute(text("ALTER TABLE documents ADD COLUMN category VARCHAR"))
 
 
 # ── hashing ─────────────────────────────────────────────────
@@ -142,6 +145,11 @@ def update_status(
 def set_summary(doc_id: int, summary: str) -> None:
     with _get_engine().begin() as c:
         c.execute(update(documents).where(documents.c.id == doc_id).values(summary=summary))
+
+
+def set_category(doc_id: int, category: str) -> None:
+    with _get_engine().begin() as c:
+        c.execute(update(documents).where(documents.c.id == doc_id).values(category=category))
 
 
 def delete(doc_id: int) -> None:

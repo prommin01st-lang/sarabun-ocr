@@ -440,7 +440,7 @@ SQLite ยังเหมาะกับ dev/เดี่ยว จึงอย�
 <a name="adr-009"></a>
 # ADR-009: Folder + หมวดหมู่ (Categorization)
 
-**Status:** 🟡 Partially implemented — **Folders (flat) + `/list` tree เสร็จ**; auto-category ยังไม่ทำ
+**Status:** ✅ Implemented — Folders (flat) + `/list` tree + **auto-category (LLM)** เสร็จ; เหลือ retrieval-filter ตามโฟลเดอร์/หมวด + hierarchy
 **Date:** 2026-07-11
 
 ## Context
@@ -480,8 +480,8 @@ documents.category  TEXT          -- หมวดหมู่ (auto จาก LL
 ## Action Items
 1. [x] ตาราง `folders` + `documents.folder_id` (flat) + migration
 2. [x] คำสั่งบอท: `/list` (tree) · `/mkfolder` · `/mv` · `/folder` (ตั้งโฟลเดอร์อัปโหลด)
-3. [ ] auto-category ใน `describe_document` step (`documents.category`)
-4. [ ] เพิ่ม folder_id/category ใน Chroma payload + filter (retrieval ตามโฟลเดอร์)
+3. [x] auto-category (`rag.classify_document` → `documents.category`, taxonomy ปรับได้ใน `.env`)
+4. [ ] เพิ่ม folder_id/category ใน Chroma payload + filter (retrieval ตามโฟลเดอร์/หมวด)
 5. [ ] hierarchy (parent_id — โครงมีแล้ว ยังใช้ flat)
 
 ---

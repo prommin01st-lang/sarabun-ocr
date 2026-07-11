@@ -62,6 +62,14 @@ COLLECTION_NAME = os.getenv("COLLECTION_NAME", "documents")
 MAX_FILE_MB = float(os.getenv("MAX_FILE_MB", "25"))   # R1: กันไฟล์ใหญ่/zip-bomb → OOM
 SANITIZE = os.getenv("SANITIZE", "false").lower() in ("1", "true", "yes")  # R2: ปกปิด PII
 
+# ── Auto-category (taxonomy ปรับได้) ────────────────────────
+CATEGORIES = [
+    c.strip() for c in os.getenv(
+        "CATEGORIES",
+        "ระเบียบ/กฎหมาย,หนังสือราชการ,รายงาน,แบบฟอร์ม,ประกาศ,สัญญา,อื่นๆ",
+    ).split(",") if c.strip()
+]
+
 
 def ensure_dirs() -> None:
     """สร้างโฟลเดอร์ data ทั้งหมด (idempotent)."""

@@ -84,20 +84,23 @@ def ingest_file(
         full_text = document.text or document.markdown or ""
         n = vectordb.index_document(doc_id, filename, full_text)
 
-        # document-level overview (ต้องมี Ollama; ถ้าล่มข้ามได้ ไม่ให้ ingest ล้ม)
-        overview = ""
+        # document-level overview + auto-category (ต้องมี Ollama; ถ้าล่มข้ามได้ ไม่ให้ ingest ล้ม)
+        overview, category = "", ""
         try:
             overview = rag.describe_document(full_text, filename)
             if overview:
                 store.set_summary(doc_id, overview)
                 vectordb.index_summary(doc_id, filename, overview)
+            category = rag.classify_document(full_text, filename)
+            if category:
+                store.set_category(doc_id, category)
         except Exception as e:  # noqa: BLE001
-            log.warning("describe_document ล้มเหลว (ข้าม overview): %s", e)
+            log.warning("overview/category ล้มเหลว (ข้าม): %s", e)
 
         store.update_status(doc_id, "indexed", n_chunks=n, extracted_path=str(ext_path))
         return {
             "status": "indexed", "doc_id": doc_id, "filename": filename,
-            "n_chunks": n, "doc_type": doc_type, "summary": overview,
+            "n_chunks": n, "doc_type": doc_type, "summary": overview, "category": category,
         }
     except Exception as e:  # noqa: BLE001 — ต้องกันทุก error ไม่ให้ bot ล่ม
         store.update_status(doc_id, "failed")

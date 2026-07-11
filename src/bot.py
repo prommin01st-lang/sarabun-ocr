@@ -69,7 +69,8 @@ async def cmd_start(update: Update, _ctx: ContextTypes.DEFAULT_TYPE) -> None:
 
 def _doc_line(d) -> str:
     icon = {"indexed": "✅", "failed": "❌", "processing": "⏳"}.get(d["status"], "•")
-    return f"   {icon} [{d['id']}] {d['filename'][:40]} ({d['n_chunks']})"
+    cat = f" · 🏷️{d['category']}" if d["category"] else ""
+    return f"   {icon} [{d['id']}] {d['filename'][:34]}{cat} ({d['n_chunks']})"
 
 
 @restricted
@@ -203,6 +204,8 @@ async def _ingest_and_reply(update: Update, ctx: ContextTypes.DEFAULT_TYPE,
     status = res["status"]
     if status == "indexed":
         msg = f"✅ เก็บแล้ว: {filename}\nชนิด: {res['doc_type']} · {res['n_chunks']} chunks"
+        if res.get("category"):
+            msg += f" · 🏷️ {res['category']}"
         if folder_name:
             msg += f" · 📁 {folder_name}"
         if res.get("summary"):
